@@ -1,7 +1,9 @@
 import sys
 import datetime as dt
 import threading
-import traceback
+import json
+import csv
+from typing import Optional, List
 
 import requests
 from PyQt6.QtCore import (
@@ -9,8 +11,20 @@ from PyQt6.QtCore import (
     QTimer,
     QMutex,
     pyqtSignal,
+    QPropertyAnimation,
+    QEasingCurve,
+    QParallelAnimationGroup,
 )
-from PyQt6.QtGui import QColor, QTextCursor
+from PyQt6.QtGui import (
+    QColor,
+    QTextCursor,
+    QFont,
+    QIcon,
+    QPalette,
+    QBrush,
+    QLinearGradient,
+    QFontMetrics,
+)
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -27,6 +41,13 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QMenu,
     QTextBrowser,
+    QFrame,
+    QGroupBox,
+    QStatusBar,
+    QProgressBar,
+    QSpacerItem,
+    QSizePolicy,
+    QHeaderView,
 )
 
 from models import VulnItem
@@ -53,17 +74,33 @@ DATE_FETCHERS = [
 ]
 PAGE_SIZE = 30
 
+# 现代科技感配色方案
+COLORS = {
+    "bg_primary": "#0f172a",      # 深蓝黑背景（主背景）
+    "bg_secondary": "#1e293b",    # 次级背景（输入框等）
+    "bg_card": "#334155",         # 卡片背景（分组框）
+    "accent_primary": "#06b6d4",  # 科技蓝（主要按钮、高亮）
+    "accent_secondary": "#8b5cf6", # 紫色（次要按钮）
+    "accent_success": "#10b981",  # 成功绿（搜索按钮）
+    "accent_warning": "#f59e0b",  # 警告橙（高风险）
+    "accent_danger": "#ef4444",   # 危险红（严重）
+    "text_primary": "#f8fafc",    # 主文本（白色）
+    "text_secondary": "#cbd5e1",  # 次级文本（浅灰）
+    "border": "#475569",          # 边框（深灰）
+}
+
+# 严重程度配色
 SEV_COLOR = {
-    "严重": QColor("#c678dd"),  # 紫
-    "极危": QColor("#e06c75"),  # 红
-    "高危": QColor("#e5a742"),  # 橘
-    "高风险": QColor("#61afef"),  # 蓝（ThreatBook）
-    "中危": QColor("#d19a66"),  # 黄
+    "严重": QColor("#bd93f9"),    # 紫
+    "极危": QColor("#ff5555"),    # 红
+    "高危": QColor("#ffb86c"),    # 橙
+    "高风险": QColor("#50fa7b"),  # 绿
+    "中危": QColor("#f1fa8c"),    # 黄
 }
 
 
 # ---------------------------------------------------------------------------
-# 主窗口
+# 主窗口（现代化重构版）
 # ---------------------------------------------------------------------------
 class MainWindow(QMainWindow):
     data_ready = pyqtSignal(list)
@@ -76,134 +113,280 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------------
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("高价值漏洞采集 & 推送工具by运维仔")
-        self.resize(1000, 900)
+        self.setWindowTitle("🛡️ 高价值漏洞采集 & 推送系统 · 科技版")
+        self.resize(1400, 950)
+
+        # 设置全局字体
+        font = QFont("Segoe UI", 11)
+        QApplication.setFont(font)
+
+        # 应用现代化样式表
+        self.apply_modern_stylesheet()
+
+        # 设置窗口居中
+        self.center_window()
 
         container = QWidget(self)
         self.setCentralWidget(container)
         root = QVBoxLayout(container)
+        root.setSpacing(12)
+        root.setContentsMargins(15, 15, 15, 15)
 
         # --------------------------------------------------------------
-        # 顶栏（2 行 × 2 功能区）
+        # 顶栏 - 分组框：数据范围与搜索
         # --------------------------------------------------------------
-        # 行 1：日期范围 + 刷新/重置 + 搜索
-        bar_top1 = QHBoxLayout()
+        group_data = self.create_group_box("📊 数据范围与搜索")
+        layout_data = QHBoxLayout(group_data)
+        layout_data.setSpacing(15)
+        layout_data.setContentsMargins(15,15,15,15)
 
-        # -- 日期范围 --
-        self.date_from = QDateEdit(calendarPopup=True)
+        # 整体居中布局
+        center_layout = QHBoxLayout()
+        center_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # 日期范围
+        date_group = QHBoxLayout()
+        date_group.setSpacing(10)
+        
+        # 日期选择区域
+        date_range_group = QHBoxLayout()
+        date_range_group.setSpacing(10)
+        
+        # 起始日期
+        date_range_group.addWidget(self.create_label("起始日期:"))
+        self.date_from = self.create_date_edit()
         self.date_from.setDate(dt.date.today() - dt.timedelta(days=2))
-        bar_top1.addWidget(QLabel("起始日期:"))
-        bar_top1.addWidget(self.date_from)
-
-        self.date_to = QDateEdit(calendarPopup=True)
+        self.date_from.setFixedWidth(160)
+        date_range_group.addWidget(self.date_from)
+        
+        # 结束日期
+        date_range_group.addWidget(self.create_label("结束日期:"))
+        self.date_to = self.create_date_edit()
         self.date_to.setDate(dt.date.today())
-        bar_top1.addWidget(QLabel("结束日期:"))
-        bar_top1.addWidget(self.date_to)
+        self.date_to.setFixedWidth(160)
+        date_range_group.addWidget(self.date_to)
+        
+        # 快捷日期按钮
+        quick_dates_group = QHBoxLayout()
+        quick_dates_group.setSpacing(5)
+        
+        today_btn = self.create_button("今天", "secondary")
+        today_btn.setFixedWidth(60)
+        today_btn.clicked.connect(lambda: self.set_date_range(dt.date.today(), dt.date.today()))
+        quick_dates_group.addWidget(today_btn)
+        
+        yesterday_btn = self.create_button("昨天", "secondary")
+        yesterday_btn.setFixedWidth(60)
+        yesterday_btn.clicked.connect(lambda: self.set_date_range(dt.date.today() - dt.timedelta(days=1), dt.date.today() - dt.timedelta(days=1)))
+        quick_dates_group.addWidget(yesterday_btn)
+        
+        last7_btn = self.create_button("近7天", "secondary")
+        last7_btn.setFixedWidth(60)
+        last7_btn.clicked.connect(lambda: self.set_date_range(dt.date.today() - dt.timedelta(days=6), dt.date.today()))
+        quick_dates_group.addWidget(last7_btn)
+        
+        last30_btn = self.create_button("近30天", "secondary")
+        last30_btn.setFixedWidth(60)
+        last30_btn.clicked.connect(lambda: self.set_date_range(dt.date.today() - dt.timedelta(days=29), dt.date.today()))
+        quick_dates_group.addWidget(last30_btn)
+        
+        # 添加到主日期组
+        date_group.addLayout(date_range_group)
+        date_group.addSpacing(15)
+        date_group.addLayout(quick_dates_group)
 
-        self.refresh_btn = QPushButton("刷新爬取")
+        button_group = QHBoxLayout()
+        button_group.setSpacing(10)
+        self.refresh_btn = self.create_button("🔄 刷新爬取", "primary")
         self.refresh_btn.clicked.connect(self.load_data)
-        bar_top1.addWidget(self.refresh_btn)
+        self.refresh_btn.setFixedWidth(120)
+        button_group.addWidget(self.refresh_btn)
 
-        self.reset_btn = QPushButton("重置")
+        self.reset_btn = self.create_button("⟲ 重置", "secondary")
         self.reset_btn.clicked.connect(self.reset_view)
-        bar_top1.addWidget(self.reset_btn)
+        self.reset_btn.setFixedWidth(100)
+        button_group.addWidget(self.reset_btn)
 
-        bar_top1.addSpacing(20)
+        search_group = QHBoxLayout()
+        search_group.setSpacing(10)
+        search_group.addWidget(self.create_label("🔍 漏洞搜索:"))
+        self.search_edit = self.create_line_edit("输入 CVE 编号或漏洞名称", 300)
+        self.search_edit.returnPressed.connect(self.search_vulns_gui)
+        search_group.addWidget(self.search_edit)
 
-        # -- 搜索 --
-        bar_top1.addWidget(QLabel("漏洞搜索:"))
-        self.search_edit = QLineEdit()
-        self.search_edit.setFixedWidth(300)
-        self.search_edit.setPlaceholderText("输入 CVE 编号或漏洞名称")
-        bar_top1.addWidget(self.search_edit)
-
-        self.search_btn = QPushButton("搜索")
+        self.search_btn = self.create_button("🔎 搜索", "accent")
         self.search_btn.clicked.connect(self.search_vulns_gui)
-        bar_top1.addWidget(self.search_btn)
+        self.search_btn.setFixedWidth(80)
+        search_group.addWidget(self.search_btn)
 
-        bar_top1.addStretch()
-        root.addLayout(bar_top1)
+        center_layout.addLayout(date_group)
+        center_layout.addSpacing(20)
+        center_layout.addLayout(button_group)
+        center_layout.addSpacing(20)
+        center_layout.addLayout(search_group)
 
-        # 行 2：认证 + 代理
-        bar_top2 = QHBoxLayout()
+        layout_data.addLayout(center_layout)
+        root.addWidget(group_data)
 
-        # -- 认证 --
-        bar_top2.addWidget(QLabel("认证目标源:"))
-        self.src_combo = QComboBox()
-        self.src_combo.addItems(["ThreatBook", "GitHub"])
+        # --------------------------------------------------------------
+        # 顶栏 - 分组框：认证与代理设置
+        # --------------------------------------------------------------
+        group_auth_proxy = self.create_group_box("⚙️ 认证与代理设置")
+        layout_auth_proxy = QHBoxLayout(group_auth_proxy)
+        layout_auth_proxy.setSpacing(15)
+        layout_auth_proxy.setContentsMargins(15, 15, 15, 15)
+
+        # 认证部分
+        auth_group = QHBoxLayout()
+        auth_group.setSpacing(10)
+        auth_group.addWidget(self.create_label("认证目标源:"))
+        self.src_combo = self.create_combo_box(["ThreatBook", "GitHub"])
         self.src_combo.currentIndexChanged.connect(self._on_src_change)
-        bar_top2.addWidget(self.src_combo)
+        self.src_combo.setFixedWidth(120)
+        auth_group.addWidget(self.src_combo)
 
-        self.auth_edit = QLineEdit()
-        self.auth_edit.setFixedWidth(320)
-        self.auth_edit.setPlaceholderText("粘贴整串 Cookie")
-        bar_top2.addWidget(self.auth_edit)
+        self.auth_edit = self.create_line_edit("粘贴整串 Cookie", 300)
+        auth_group.addWidget(self.auth_edit)
 
-        self.auth_btn = QPushButton("应用认证")
+        self.auth_btn = self.create_button("⚡ 应用认证", "primary")
         self.auth_btn.clicked.connect(self.apply_auth)
-        bar_top2.addWidget(self.auth_btn)
+        self.auth_btn.setFixedWidth(100)
+        auth_group.addWidget(self.auth_btn)
 
-        bar_top2.addSpacing(30)
+        # 代理部分
+        proxy_group = QHBoxLayout()
+        proxy_group.setSpacing(10)
+        proxy_group.addWidget(self.create_label("HTTP 代理:"))
+        self.http_edit = self.create_line_edit("127.0.0.1:7890", 150)
+        proxy_group.addWidget(self.http_edit)
 
-        # -- 代理 --
-        bar_top2.addWidget(QLabel("HTTP 代理:"))
-        self.http_edit = QLineEdit()
-        self.http_edit.setFixedWidth(180)
-        bar_top2.addWidget(self.http_edit)
+        proxy_group.addWidget(self.create_label("HTTPS 代理:"))
+        self.https_edit = self.create_line_edit("127.0.0.1:7890", 150)
+        proxy_group.addWidget(self.https_edit)
 
-        bar_top2.addWidget(QLabel("HTTPS 代理:"))
-        self.https_edit = QLineEdit()
-        self.https_edit.setFixedWidth(180)
-        bar_top2.addWidget(self.https_edit)
+        self.proxy_btn = self.create_button("🌐 应用代理", "secondary")
+        self.proxy_btn.clicked.connect(self.apply_proxy)
+        self.proxy_btn.setFixedWidth(100)
+        proxy_group.addWidget(self.proxy_btn)
 
-        self.proxy_btn = QPushButton("应用代理")
-        self.proxy_btn.clicked.connect(self.apply_proxy)  # ★ 修复未绑定
-        bar_top2.addWidget(self.proxy_btn)
+        self.test_btn = self.create_button("🧪 测试代理", "accent")
+        self.test_btn.clicked.connect(self.test_proxy)
+        self.test_btn.setFixedWidth(100)
+        proxy_group.addWidget(self.test_btn)
 
-        self.test_btn = QPushButton("测试代理")
-        self.test_btn.clicked.connect(self.test_proxy)  # ★ 修复未绑定
-        bar_top2.addWidget(self.test_btn)
+        # 居中布局
+        auth_center = QHBoxLayout()
+        auth_center.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        auth_center.addLayout(auth_group)
+        auth_center.addSpacing(20)
+        auth_center.addLayout(proxy_group)
 
-        bar_top2.addStretch()
-        root.addLayout(bar_top2)
+        layout_auth_proxy.addLayout(auth_center)
+        root.addWidget(group_auth_proxy)
+
+        # 分隔线
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setObjectName("separator")
+        root.addWidget(separator)
 
         # --------------------------------------------------------------
         # 中部：表格 + 详情
         # --------------------------------------------------------------
         mid = QHBoxLayout()
+        mid.setSpacing(12)
 
-        # 表格
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["名称", "日期", "来源", "等级"])
-        self.table.setSelectionBehavior(self.table.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(self.table.EditTrigger.NoEditTriggers)
-        self.table.cellClicked.connect(self.show_detail)
+        # 表格容器
+        table_group = self.create_group_box("📋 漏洞列表")
+        table_layout = QVBoxLayout(table_group)
+        table_layout.setContentsMargins(5, 5, 5, 5)
 
-        header = self.table.horizontalHeader()
-        header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        header.customContextMenuRequested.connect(self.show_header_menu)
+        self.table = self.create_table_widget()
+        table_layout.addWidget(self.table)
 
-        mid.addWidget(self.table, 3)
+        mid.addWidget(table_group, 3)
 
-        # 详情
-        self.detail_box = QTextBrowser()
-        self.detail_box.setOpenExternalLinks(True)
-        mid.addWidget(self.detail_box, 5)
+        # 详情容器
+        detail_group = self.create_group_box("📖 漏洞详情")
+        detail_layout = QVBoxLayout(detail_group)
+        detail_layout.setContentsMargins(6, 6, 6, 6)
+
+        self.detail_box = self.create_text_browser()
+        detail_layout.addWidget(self.detail_box)
+
+        mid.addWidget(detail_group, 5)
 
         root.addLayout(mid)
 
         # --------------------------------------------------------------
-        # 分页
+        # 分页导航
         # --------------------------------------------------------------
         nav = QHBoxLayout()
-        self.prev_btn = QPushButton("上一页")
+        nav.setContentsMargins(0, 15, 0, 15)
+        nav.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        nav.setSpacing(15)
+
+        # 首页按钮
+        self.first_btn = self.create_button("⏮ 首页", "secondary")
+        self.first_btn.clicked.connect(lambda: self.change_page(-self.page))
+        self.first_btn.setEnabled(False)
+        self.first_btn.setFixedWidth(80)
+        nav.addWidget(self.first_btn)
+
+        # 上一页按钮
+        self.prev_btn = self.create_button("◀ 上一页", "secondary")
         self.prev_btn.clicked.connect(lambda: self.change_page(-1))
-        self.next_btn = QPushButton("下一页")
-        self.next_btn.clicked.connect(lambda: self.change_page(1))
-        nav.addStretch()
+        self.prev_btn.setEnabled(False)
+        self.prev_btn.setFixedWidth(100)
         nav.addWidget(self.prev_btn)
+
+        # 页码显示
+        self.page_label = QLabel("第 1 页，共 0 页")
+        self.page_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px; font-weight: bold;")
+        self.page_label.setFixedWidth(120)
+        self.page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        nav.addWidget(self.page_label)
+
+        # 下一页按钮
+        self.next_btn = self.create_button("下一页 ▶", "secondary")
+        self.next_btn.clicked.connect(lambda: self.change_page(1))
+        self.next_btn.setEnabled(False)
+        self.next_btn.setFixedWidth(100)
         nav.addWidget(self.next_btn)
+
+        # 末页按钮
+        self.last_btn = self.create_button("末页 ⏭", "secondary")
+        self.last_btn.clicked.connect(self.go_to_last_page)
+        self.last_btn.setEnabled(False)
+        self.last_btn.setFixedWidth(80)
+        nav.addWidget(self.last_btn)
+
         root.addLayout(nav)
+
+        # --------------------------------------------------------------
+        # 状态栏
+        # --------------------------------------------------------------
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.setObjectName("statusBar")
+
+        self.status_label = QLabel("🟢 就绪 - 等待操作")
+        self.status_label.setStyleSheet("color: #00ff9d; font-weight: bold;")
+        self.status_bar.addWidget(self.status_label, 1)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setFixedWidth(200)
+        self.status_bar.addPermanentWidget(self.progress_bar)
+
+        self.count_label = QLabel("共 0 条漏洞")
+        self.count_label.setStyleSheet(f"color: {COLORS['accent_primary']}; font-weight: 500;")
+        self.status_bar.addPermanentWidget(self.count_label)
+        
+        # 初始化分页状态
+        self.page = 0
+        self.full_data = []
+        self.update_table()
 
         # --------------------------------------------------------------
         # 运行时状态
@@ -221,14 +404,472 @@ class MainWindow(QMainWindow):
         self.proxy_test_done.connect(self._show_proxy_msg)
         self.search_finished.connect(self.handle_search_results)
 
-        # 首次加载数据
-        self.load_data()
+        # ⚠️ 移除启动时自动加载数据
+        # self.load_data()  # 已注释，改为手动触发
 
         # 读取保存的 GitHub Token
         cfg = load_cfg()
         if token := cfg.get("github_token"):
             set_github_token(token)
             self.auth_edit.setText(token)
+
+        # 更新状态栏
+        self.update_status('🟢 就绪 - 请点击"刷新爬取"按钮开始采集', 'success')
+
+    # ------------------------------------------------------------------
+    # UI 组件工厂方法
+    # ------------------------------------------------------------------
+    def apply_modern_stylesheet(self):
+        """应用现代科技感样式表"""
+        self.setStyleSheet(f"""
+            QMainWindow {{
+                background-color: {COLORS["bg_primary"]};
+                color: {COLORS["text_primary"]};
+                font-size: 11px;
+            }}}}
+            QWidget {{
+                background-color: {COLORS["bg_primary"]};
+                color: {COLORS["text_primary"]};
+                font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+                font-size: 11px;
+            }}
+            QGroupBox {{
+                background-color: {COLORS["bg_card"]};
+                color: {COLORS["text_primary"]};
+                border: 1px solid {COLORS["border"]};
+                border-radius: 12px;
+                margin-top: 20px;
+                font-weight: bold;
+                padding-top: 15px;
+                font-size: 13px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 20px;
+                padding: 0 10px;
+                color: {COLORS["accent_primary"]};
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            QPushButton {{
+                background-color: {COLORS["bg_secondary"]};
+                color: {COLORS["text_primary"]};
+                border: 1px solid {COLORS["border"]};
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-weight: bold;
+                min-width: 80px;
+                font-size: 11px;
+                transition: all 0.2s ease;
+                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS["bg_card"]};
+                border-color: {COLORS["accent_primary"]};
+                transform: translateY(-1px);
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+            }}
+            QPushButton:pressed {{
+                background-color: {COLORS["accent_primary"]};
+                color: {COLORS["bg_primary"]};
+                transform: translateY(0);
+                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+            }}
+            QPushButton:disabled {{
+                background-color: {COLORS["bg_secondary"]};
+                color: {COLORS["text_secondary"]};
+                border-color: {COLORS["border"]};
+                transform: none;
+            }}
+            QPushButton#primary {{
+                background-color: {COLORS["accent_primary"]};
+                color: {COLORS["bg_primary"]};
+                border: none;
+            }}
+            QPushButton#primary:hover {{
+                background-color: #0891b2;
+            }}
+            QPushButton#secondary {{
+                background-color: {COLORS["accent_secondary"]};
+                color: white;
+                border: none;
+            }}
+            QPushButton#secondary:hover {{
+                background-color: #7c3aed;
+            }}
+            QPushButton#accent {{
+                background-color: {COLORS["accent_success"]};
+                color: {COLORS["bg_primary"]};
+                border: none;
+            }}
+            QPushButton#accent:hover {{
+                background-color: #059669;
+            }}
+            QLineEdit, QDateEdit, QComboBox {{
+                background-color: {COLORS["bg_secondary"]};
+                color: {COLORS["text_primary"]};
+                border: 1px solid {COLORS["border"]};
+                border-radius: 6px;
+                padding: 6px 10px;
+                selection-background-color: {COLORS["accent_primary"]};
+                selection-color: {COLORS["bg_primary"]};
+                font-size: 11px;
+                transition: border-color 0.2s ease;
+            }}
+            QLineEdit:focus, QDateEdit:focus, QComboBox:focus {{
+                border-color: {COLORS["accent_primary"]};
+                background-color: {COLORS["bg_card"]};
+            }}
+            QDateEdit::down-arrow, QComboBox::down-arrow {{
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid {COLORS["accent_primary"]};
+                margin-right: 8px;
+            }}
+            QDateEdit:focus::drop-down, QComboBox:focus::drop-down {{
+                background-color: {COLORS["bg_card"]};
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {{COLORS["bg_secondary"]}};
+                color: {{COLORS["text_primary"]}};
+                border: 1px solid {{COLORS["border"]}};
+                border-radius: 6px;
+                selection-background-color: {{COLORS["accent_primary"]}};
+                selection-color: {{COLORS["bg_primary"]}};
+                font-size: 11px;
+            }}
+            QTableWidget {{
+                background-color: {COLORS["bg_secondary"]};
+                color: {COLORS["text_primary"]};
+                border: 1px solid {COLORS["border"]};
+                border-radius: 8px;
+                gridline-color: {COLORS["border"]};
+                selection-background-color: rgba(6, 182, 212, 0.2);
+                alternate-background-color: {COLORS["bg_card"]};
+                box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
+            }}
+            QTableWidget::item {{
+                padding: 8px;
+                border: none;
+                font-size: 11px;
+                transition: background-color 0.2s ease;
+            }}
+            QTableWidget::item:selected {{
+                background-color: rgba(6, 182, 212, 0.3);
+                border: 1px solid {COLORS["accent_primary"]};
+            }}
+            QHeaderView::section {{
+                background-color: {COLORS["bg_card"]};
+                color: {COLORS["accent_primary"]};
+                border: 1px solid {COLORS["border"]};
+                padding: 10px;
+                font-weight: bold;
+                font-size: 11px;
+            }}
+            QTextBrowser {{
+                background-color: {COLORS["bg_secondary"]};
+                color: {COLORS["text_primary"]};
+                border: 1px solid {COLORS["border"]};
+                border-radius: 8px;
+                padding: 12px;
+                font-family: "Consolas", "Courier New", monospace;
+                font-size: 11px;
+            }}
+            QTextBrowser a {{
+                color: {COLORS["accent_primary"]};
+                text-decoration: none;
+            }}
+            QTextBrowser a:hover {{
+                color: {COLORS["accent_secondary"]};
+                text-decoration: underline;
+            }}
+            QProgressBar {{
+                background-color: {COLORS["bg_secondary"]};
+                border: 1px solid {COLORS["border"]};
+                border-radius: 6px;
+                text-align: center;
+                color: {COLORS["accent_primary"]};
+                font-size: 11px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {COLORS["accent_primary"]};
+                border-radius: 6px;
+            }}
+            QStatusBar {{
+                background-color: {COLORS["bg_card"]};
+                color: {COLORS["text_primary"]};
+                border-top: 1px solid {COLORS["border"]};
+                padding: 5px;
+                font-size: 11px;
+            }}
+            QFrame#separator {{
+                background-color: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 rgba(6,182,212,0),
+                    stop:0.5 {COLORS["accent_primary"]},
+                    stop:1 rgba(6,182,212,0)
+                );
+                max-height: 2px;
+                margin: 10px 0;
+            }}
+            QLabel {{
+                color: {COLORS["text_secondary"]};
+                font-size: 11px;
+            }}
+            QScrollBar:vertical {{
+                background-color: {COLORS["bg_secondary"]};
+                width: 12px;
+                border-radius: 6px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {COLORS["border"]};
+                border-radius: 6px;
+                min-height: 25px;
+                margin: 1px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {COLORS["accent_primary"]};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar:horizontal {{
+                background-color: {COLORS["bg_secondary"]};
+                height: 12px;
+                border-radius: 6px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background-color: {COLORS["border"]};
+                border-radius: 6px;
+                min-width: 25px;
+                margin: 1px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background-color: {COLORS["accent_primary"]};
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0px;
+            }}
+        """)
+
+    def center_window(self):
+        """窗口居中显示"""
+        screen = QApplication.primaryScreen()
+        screen_geometry = screen.geometry()
+        window_geometry = self.geometry()
+        
+        x = (screen_geometry.width() - window_geometry.width()) // 2
+        y = (screen_geometry.height() - window_geometry.height()) // 2
+        
+        self.move(x, y)
+
+    def create_group_box(self, title: str) -> QGroupBox:
+        """创建分组框"""
+        group = QGroupBox(title)
+        # 计算标题宽度，用于居中对齐
+        font = QFont("Segoe UI", 15, QFont.Weight.Bold)
+        fm = QFontMetrics(font)
+        title_width = fm.horizontalAdvance(title)
+        margin_left = -title_width // 2
+        
+        group.setStyleSheet(f"""
+        .QGroupBox {{
+            background-color: {COLORS['bg_card']};
+            color: {COLORS['text_primary']};
+            border: 1px solid {COLORS['border']};
+            border-radius: 12px;
+            margin-top: 20px;
+            font-weight: bold;
+            padding-top: 20px;
+            font-size: 15px;
+        }}
+        .QGroupBox::title {{
+            subcontrol-origin: margin;
+            left: 50%;
+            margin-left: {margin_left}px;
+            padding: 0 10px;
+            color: {COLORS['accent_primary']};
+            font-size: 15px;
+            font-weight: bold;
+        }}""")
+        return group
+
+    def create_label(self, text: str) -> QLabel:
+        """创建标签"""
+        label = QLabel(text)
+        label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-weight: bold; font-size: 11px;")
+        label.setFixedHeight(30)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        return label
+
+    def create_button(self, text: str, btn_type: str = "default") -> QPushButton:
+        """创建按钮"""
+        btn = QPushButton(text)
+        if btn_type != "default":
+            btn.setObjectName(btn_type)
+        btn.setFixedHeight(30)
+        return btn
+
+    def create_line_edit(self, placeholder: str, width: Optional[int] = None) -> QLineEdit:
+        """创建文本输入框"""
+        edit = QLineEdit()
+        edit.setPlaceholderText(placeholder)
+        edit.setFixedHeight(30)
+        if width:
+            edit.setFixedWidth(width)
+        # 确保应用背景色
+        edit.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {COLORS['bg_secondary']};
+                color: {COLORS['text_primary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 6px;
+                padding: 6px 10px;
+                selection-background-color: {COLORS['accent_primary']};
+                font-size: 11px;
+            }}
+            QLineEdit:focus {{
+                border-color: {COLORS['accent_primary']};
+            }}
+        """)
+        return edit
+
+    def create_date_edit(self) -> QDateEdit:
+        """创建日期选择器"""
+        edit = QDateEdit(calendarPopup=True)
+        edit.setDisplayFormat("yyyy-MM-dd")
+        edit.setCalendarPopup(True)
+        edit.setFixedHeight(34)
+        edit.setFixedWidth(160)
+        # 确保应用背景色
+        edit.setStyleSheet(f"""
+            QDateEdit {{
+                background-color: {COLORS['bg_secondary']};
+                color: {COLORS['text_primary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+                padding: 8px 12px;
+                selection-background-color: {COLORS['accent_primary']};
+                font-size: 12px;
+                font-weight: 500;
+                transition: all 0.2s ease;
+            }}
+            QDateEdit:focus {{
+                border-color: {COLORS['accent_primary']};
+                background-color: {COLORS['bg_card']};
+                box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.2);
+            }}
+            QDateEdit::drop-down {{
+                border: none;
+                background-color: {COLORS['bg_secondary']};
+                width: 30px;
+                border-radius: 0 8px 8px 0;
+            }}
+            QDateEdit::drop-down:hover {{
+                background-color: {COLORS['bg_card']};
+            }}
+            QDateEdit::down-arrow {{
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid {COLORS['accent_primary']};
+                margin-right: 10px;
+                margin-top: 2px;
+            }}
+            QCalendarWidget {{
+                background-color: {COLORS['bg_secondary']};
+                color: {COLORS['text_primary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+            }}
+            QCalendarWidget QWidget {{
+                alternate-background-color: {COLORS['bg_card']};
+            }}
+            QCalendarWidget QHeaderView {{ 
+                background-color: {COLORS['bg_card']};
+                color: {COLORS['accent_primary']};
+                font-weight: bold;
+            }}
+            QCalendarWidget QDayOfWeekRow {{ 
+                background-color: {COLORS['bg_card']};
+            }}
+            QCalendarWidget QAbstractItemView:selected {{
+                background-color: {COLORS['accent_primary']};
+                color: {COLORS['bg_primary']};
+            }}
+            QCalendarWidget QAbstractItemView:hover:!selected {{
+                background-color: {COLORS['bg_card']};
+            }}
+        """)
+        return edit
+
+    def create_combo_box(self, items: list) -> QComboBox:
+        """创建下拉框"""
+        combo = QComboBox()
+        combo.addItems(items)
+        combo.setFixedHeight(30)
+        # 确保应用背景色
+        combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {COLORS['bg_secondary']};
+                color: {COLORS['text_primary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 6px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
+            QComboBox:focus {{
+                border-color: {COLORS['accent_primary']};
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                background-color: {COLORS['bg_secondary']};
+                width: 20px;
+            }}
+            QComboBox::down-arrow {{
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid {COLORS['accent_primary']};
+                margin-right: 8px;
+            }}
+        """)
+        return combo
+
+    def create_table_widget(self) -> QTableWidget:
+        """创建表格"""
+        table = QTableWidget(0, 4)
+        table.setHorizontalHeaderLabels(["📝 名称", "📅 日期", "🌐 来源", "⚠️ 等级"])
+        table.setSelectionBehavior(table.SelectionBehavior.SelectRows)
+        table.setEditTriggers(table.EditTrigger.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+        table.cellClicked.connect(self.show_detail)
+        # 添加右键菜单支持
+        table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        table.customContextMenuRequested.connect(self.show_table_menu)
+
+        header = table.horizontalHeader()
+        header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        header.customContextMenuRequested.connect(self.show_header_menu)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        header.resizeSection(1, 110)
+        header.resizeSection(2, 120)
+        header.resizeSection(3, 90)
+
+        return table
+
+    def create_text_browser(self) -> QTextBrowser:
+        """创建文本浏览器"""
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.setPlaceholderText("👈 点击左侧漏洞查看详情...")
+        return browser
 
     # ------------------------------------------------------------------
     # 表头右键菜单：显示/隐藏列
@@ -243,6 +884,28 @@ class MainWindow(QMainWindow):
             act.setChecked(not header.isSectionHidden(idx))
             act.toggled.connect(lambda chk, i=idx: header.showSection(i) if chk else header.hideSection(i))
         menu.exec(header.mapToGlobal(pos))
+
+    # ------------------------------------------------------------------
+    # 表格右键菜单：导出功能
+    # ------------------------------------------------------------------
+    def show_table_menu(self, pos):
+        menu = QMenu(self)
+        
+        # 导出全部
+        export_all_act = menu.addAction("导出全部")
+        export_all_act.triggered.connect(self.export_all)
+        
+        # 导出时间范围
+        export_date_act = menu.addAction("导出时间范围")
+        export_date_act.triggered.connect(self.export_by_date)
+        
+        # 导出单条
+        selected_rows = self.table.selectionModel().selectedRows()
+        if selected_rows:
+            export_single_act = menu.addAction("导出单条")
+            export_single_act.triggered.connect(self.export_single)
+        
+        menu.exec(self.table.mapToGlobal(pos))
 
     # ------------------------------------------------------------------
     # 认证相关
@@ -312,22 +975,19 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "输入错误", "请输入要搜索的 CVE 编号或漏洞名称！")
             return
 
-        # ① 若定时刷新正在运行，先暂停
         if self.timer.isActive():
             self.timer.stop()
 
-        # ② 清空现有表格和详情（无论 timer 是否在运行，都要清一次）
         self.full_data.clear()
         self.table.setRowCount(0)
         self.detail_box.clear()
 
-        # ③ 置灰按钮，防止重复点击
         self.refresh_btn.setEnabled(False)
         self.search_btn.setEnabled(False)
+        self.update_status(f"正在搜索：{keyword}...", "loading")
 
-        # ④ 开线程执行实际搜索
         def worker():
-            vulns = search_vulns(keyword)  # ⬅️ 调用统一搜索入口
+            vulns = search_vulns(keyword)
             self.search_finished.emit(vulns)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -338,14 +998,15 @@ class MainWindow(QMainWindow):
 
         if not vulns:
             QMessageBox.information(self, "无结果", "未找到匹配的漏洞！")
-            # 搜索无结果也恢复定时刷新
             if not self.timer.isActive():
                 self.timer.start(30 * 60 * 1000)
+            self.update_status("搜索完成，无结果", "warning")
             return
 
         self.full_data = vulns
         self.page = 0
         self.update_table()
+        self.update_status(f"搜索到 {len(vulns)} 条结果", "success")
     # ------------------------------------------------------------------
     # 数据抓取
     # ------------------------------------------------------------------
@@ -353,7 +1014,8 @@ class MainWindow(QMainWindow):
         if not self._mtx.tryLock():
             return
 
-        self.refresh_btn.setEnabled(False)
+        self.set_loading(True)
+        self.update_status("正在爬取漏洞数据...", "loading")
 
         start_date = self.date_from.date().toPyDate()
         end_date = self.date_to.date().toPyDate()
@@ -361,15 +1023,22 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "日期错误", "起始日期不能晚于结束日期！")
             self.refresh_btn.setEnabled(True)
             self._mtx.unlock()
+            self.set_loading(False)
             return
 
         def worker():
             data: list[VulnItem] = []
             cursor = start_date
+            total_days = (end_date - start_date).days + 1
+            processed = 0
+            
             while cursor <= end_date:
                 day_str = cursor.isoformat()
                 data.extend(fetch_all(day_str, DATE_FETCHERS))
                 cursor += dt.timedelta(days=1)
+                processed += 1
+                # 更新进度（通过信号槽）
+            
             self.data_ready.emit(data)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -378,18 +1047,143 @@ class MainWindow(QMainWindow):
         self.full_data = sorted(data, key=lambda v: v.name)
         self.page = 0
         self.update_table()
-        self.refresh_btn.setEnabled(True)
         self._mtx.unlock()
+        self.set_loading(False)
+        
         if data and not self.timer.isActive():
             self.timer.start(30 * 60 * 1000)  # 30‑min auto‑refresh
+        
+        self.update_status(f"数据加载完成，共 {len(data)} 条漏洞", "success")
+
+    # ------------------------------------------------------------------
+    # 导出功能
+    # ------------------------------------------------------------------
+    def export_all(self):
+        """导出所有漏洞"""
+        if not self.full_data:
+            QMessageBox.information(self, "提示", "没有数据可导出")
+            return
+        
+        self._export_vulns(self.full_data, "all")
+
+    def export_by_date(self):
+        """导出时间范围内的漏洞"""
+        if not self.full_data:
+            QMessageBox.information(self, "提示", "没有数据可导出")
+            return
+        
+        start_date = self.date_from.date().toString("yyyy-MM-dd")
+        end_date = self.date_to.date().toString("yyyy-MM-dd")
+        
+        filtered_data = [vuln for vuln in self.full_data if start_date <= vuln.date <= end_date]
+        if not filtered_data:
+            QMessageBox.information(self, "提示", f"{start_date} 到 {end_date} 期间没有数据")
+            return
+        
+        self._export_vulns(filtered_data, f"date_{start_date}_{end_date}")
+
+    def export_single(self):
+        """导出选中的单条漏洞"""
+        selected_rows = self.table.selectionModel().selectedRows()
+        if not selected_rows:
+            QMessageBox.information(self, "提示", "请先选择一条漏洞")
+            return
+        
+        row = selected_rows[0].row()
+        start = self.page * PAGE_SIZE
+        vuln = self.full_data[start + row]
+        
+        self._export_vulns([vuln], f"single_{vuln.cve or vuln.name[:20].replace(' ', '_')}")
+
+    # ------------------------------------------------------------------
+    # 日期范围设置
+    # ------------------------------------------------------------------
+    def set_date_range(self, start_date: dt.date, end_date: dt.date):
+        """设置日期范围"""
+        self.date_from.setDate(start_date)
+        self.date_to.setDate(end_date)
+
+    def _export_vulns(self, vulns: List[VulnItem], filename_prefix: str):
+        """导出漏洞数据"""
+        import os
+        
+        # 创建导出目录
+        export_dir = "exports"
+        os.makedirs(export_dir, exist_ok=True)
+        
+        # 生成文件名
+        timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{export_dir}/{filename_prefix}_{timestamp}"
+        
+        # 导出为 JSON
+        json_filename = f"{filename}.json"
+        with open(json_filename, 'w', encoding='utf-8') as f:
+            json.dump([
+                {
+                    "name": vuln.name,
+                    "cve": vuln.cve,
+                    "date": vuln.date,
+                    "severity": vuln.severity,
+                    "tags": vuln.tags,
+                    "source": vuln.source,
+                    "description": vuln.description,
+                    "reference": vuln.reference
+                }
+                for vuln in vulns
+            ], f, ensure_ascii=False, indent=2)
+        
+        # 导出为 CSV
+        csv_filename = f"{filename}.csv"
+        with open(csv_filename, 'w', newline='', encoding='utf-8-sig') as f:
+            writer = csv.writer(f)
+            writer.writerow(["名称", "CVE编号", "日期", "严重程度", "标签", "来源", "描述", "参考链接"])
+            for vuln in vulns:
+                writer.writerow([
+                    vuln.name,
+                    vuln.cve or "",
+                    vuln.date,
+                    vuln.severity,
+                    vuln.tags or "",
+                    vuln.source,
+                    vuln.description or "",
+                    "\n".join(vuln.reference) if vuln.reference else ""
+                ])
+        
+        QMessageBox.information(self, "导出成功", f"已导出到:\n{json_filename}\n{csv_filename}")
 
     # ------------------------------------------------------------------
     # UI 辅助
     # ------------------------------------------------------------------
+    def update_status(self, message: str, status_type: str = "info"):
+        """更新状态栏"""
+        colors = {
+            "info": "#00d4ff",
+            "success": "#00ff9d",
+            "warning": "#ffb86c",
+            "error": "#ff5555",
+            "loading": "#f1fa8c",
+        }
+        color = colors.get(status_type, colors["info"])
+        self.status_label.setText(f"● {message}")
+        self.status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+
+    def set_loading(self, loading: bool):
+        """设置加载状态"""
+        if loading:
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setRange(0, 0)  # 无限循环
+            self.refresh_btn.setEnabled(False)
+            self.search_btn.setEnabled(False)
+        else:
+            self.progress_bar.setVisible(False)
+            self.refresh_btn.setEnabled(True)
+            self.search_btn.setEnabled(True)
+
     def _flash(self, btn: QPushButton):
-        old = btn.text()
-        btn.setText("已更新")
-        QTimer.singleShot(1500, lambda: btn.setText(old))
+        """按钮闪烁动画"""
+        original_style = btn.styleSheet()
+        btn.setStyleSheet(f"background-color: {COLORS['accent_primary']}; color: {COLORS['bg_primary']};")
+        QTimer.singleShot(300, lambda: btn.setStyleSheet(original_style))
 
     def reset_view(self):
         self.detail_box.clear()
@@ -405,13 +1199,31 @@ class MainWindow(QMainWindow):
                 itm = QTableWidgetItem(text)
                 if c == 3 and v.severity in SEV_COLOR:
                     itm.setForeground(SEV_COLOR[v.severity])
+                    itm.setBackground(QColor(COLORS["bg_secondary"]))
                 self.table.setItem(r, c, itm)
 
-        self.prev_btn.setEnabled(self.page > 0)
-        self.next_btn.setEnabled(start + PAGE_SIZE < len(self.full_data))
+        total_pages = max(1, (len(self.full_data) + PAGE_SIZE - 1) // PAGE_SIZE)
+        self.page_label.setText(f"第 {self.page + 1} 页，共 {total_pages} 页")
+        
+        # 更新按钮状态
+        has_data = len(self.full_data) > 0
+        self.first_btn.setEnabled(has_data and self.page > 0)
+        self.prev_btn.setEnabled(has_data and self.page > 0)
+        self.next_btn.setEnabled(has_data and start + PAGE_SIZE < len(self.full_data))
+        self.last_btn.setEnabled(has_data and self.page < total_pages - 1)
+        
+        self.count_label.setText(f"共 {len(self.full_data)} 条漏洞")
 
     def change_page(self, delta: int):
         self.page += delta
+        self.update_table()
+
+    def go_to_last_page(self):
+        """跳转到最后一页"""
+        if not self.full_data:
+            return
+        total_pages = (len(self.full_data) + PAGE_SIZE - 1) // PAGE_SIZE
+        self.page = total_pages - 1
         self.update_table()
 
     # ------------------------------------------------------------------
