@@ -48,6 +48,7 @@ from PyQt6.QtWidgets import (
     QSpacerItem,
     QSizePolicy,
     QHeaderView,
+    QDialog,
 )
 
 from models import VulnItem
@@ -107,6 +108,7 @@ class MainWindow(QMainWindow):
     proxy_test_done = pyqtSignal(str)
     add_html = pyqtSignal(str)
     search_finished = pyqtSignal(list)
+    sources_test_done = pyqtSignal(str)
 
     # ---------------------------------------------------------------------
     # 初始化
@@ -274,6 +276,11 @@ class MainWindow(QMainWindow):
         self.test_btn.setFixedWidth(100)
         proxy_group.addWidget(self.test_btn)
 
+        self.test_sources_btn = self.create_button("🔍 测试数据源", "primary")
+        self.test_sources_btn.clicked.connect(self.test_data_sources)
+        self.test_sources_btn.setFixedWidth(120)
+        proxy_group.addWidget(self.test_sources_btn)
+
         # 居中布局
         auth_center = QHBoxLayout()
         auth_center.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -403,6 +410,7 @@ class MainWindow(QMainWindow):
         self.add_html.connect(self._append_html)
         self.proxy_test_done.connect(self._show_proxy_msg)
         self.search_finished.connect(self.handle_search_results)
+        self.sources_test_done.connect(self._show_sources_msg)
 
         # ⚠️ 移除启动时自动加载数据
         # self.load_data()  # 已注释，改为手动触发
@@ -966,6 +974,73 @@ class MainWindow(QMainWindow):
     def _show_proxy_msg(self, msg: str):
         QMessageBox.information(self, "代理测试结果", msg)
 
+    def test_data_sources(self):
+        """测试所有数据源的有效性"""
+        self.update_status("正在测试数据源...", "loading")
+        
+        def worker():
+            data_sources = [
+                ("长亭 Rivers", "changtin", "fetch_changtin"),
+                ("OSCS", "oscs", "fetch_oscs"),
+                ("奇安信", "qianxin", "fetch_qianxin"),
+                ("ThreatBook", "threatbook", "fetch_threatbook"),
+                ("CISA", "cisa", "fetch_cisa"),
+            ]
+            
+            results = {}
+            for name, module_name, function_name in data_sources:
+                try:
+                    module = __import__(module_name)
+                    fetch_function = getattr(module, function_name)
+                    # 测试函数是否存在且可调用
+                    if callable(fetch_function):
+                        # 尝试获取今天和昨天的数据
+                        import datetime
+                        today = datetime.date.today().isoformat()
+                        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+                        
+                        # 测试今天的数据
+                        vulns_today = fetch_function(today)
+                        # 测试昨天的数据
+                        vulns_yesterday = fetch_function(yesterday)
+                        # 合并结果
+                        vulns = vulns_today + vulns_yesterday
+                        results[name] = {
+                            "status": "有效",
+                            "count": len(vulns),
+                            "today_count": len(vulns_today),
+                            "yesterday_count": len(vulns_yesterday)
+                        }
+                    else:
+                        results[name] = {
+                            "status": "无效",
+                            "error": "函数不可调用"
+                        }
+                except Exception as e:
+                    results[name] = {
+                        "status": "无效",
+                        "error": str(e)
+                    }
+            
+            # 构建消息
+            msg = "数据源测试结果：\n\n"
+            for name, result in results.items():
+                if result["status"] == "有效":
+                    msg += f"✅ {name}: 有效 (今天: {result.get('today_count', 0)} 条, 昨天: {result.get('yesterday_count', 0)} 条, 总计: {result['count']} 条)\n"
+                else:
+                    msg += f"❌ {name}: 无效 - {result['error']}\n"
+            
+            # 通过信号在主线程中显示消息
+            self.sources_test_done.emit(msg)
+            self.update_status("数据源测试完成", "success")
+        
+        # 在后台线程中执行测试
+        threading.Thread(target=worker, daemon=True).start()
+        
+    def _show_sources_msg(self, msg: str):
+        """在主线程中显示数据源测试结果"""
+        QMessageBox.information(self, "数据源测试", msg)
+
     # ------------------------------------------------------------------
     # 搜索
     # ------------------------------------------------------------------
@@ -1072,15 +1147,130 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "没有数据可导出")
             return
         
-        start_date = self.date_from.date().toString("yyyy-MM-dd")
-        end_date = self.date_to.date().toString("yyyy-MM-dd")
+        # 创建日期选择对话框
+        dialog = QDialog(self)
+        dialog.setWindowTitle("选择导出时间范围")
+        dialog.setMinimumWidth(400)
         
-        filtered_data = [vuln for vuln in self.full_data if start_date <= vuln.date <= end_date]
-        if not filtered_data:
-            QMessageBox.information(self, "提示", f"{start_date} 到 {end_date} 期间没有数据")
-            return
+        # 应用现代化样式
+        style_sheet = """
+            QDialog {
+                background-color: %s;
+                color: %s;
+                border-radius: 12px;
+            }
+            QLabel {
+                color: %s;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            QDateEdit {
+                background-color: %s;
+                color: %s;
+                border: 1px solid %s;
+                border-radius: 6px;
+                padding: 6px 10px;
+                selection-background-color: %s;
+                selection-color: %s;
+                font-size: 11px;
+            }
+            QDateEdit:focus {
+                border-color: %s;
+                background-color: %s;
+            }
+            QDateEdit::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid %s;
+                margin-right: 8px;
+            }
+            QPushButton {
+                background-color: %s;
+                color: %s;
+                border: none;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-weight: bold;
+                font-size: 11px;
+                min-width: 80px;
+                transition: all 0.2s ease;
+            }
+            QPushButton:hover {
+                background-color: #0891b2;
+                transform: translateY(-1px);
+            }
+            QPushButton:pressed {
+                background-color: #0891b2;
+                transform: translateY(0);
+            }
+        """ % (COLORS["bg_secondary"], COLORS["text_primary"],
+                COLORS["text_primary"],
+                COLORS["bg_card"], COLORS["text_primary"], COLORS["border"],
+                COLORS["accent_primary"], COLORS["bg_primary"],
+                COLORS["accent_primary"], COLORS["bg_primary"],
+                COLORS["accent_primary"],
+                COLORS["accent_primary"], COLORS["bg_primary"])
         
-        self._export_vulns(filtered_data, f"date_{start_date}_{end_date}")
+        dialog.setStyleSheet(style_sheet)
+        
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # 起始日期
+        date_layout = QHBoxLayout()
+        date_layout.addWidget(QLabel("起始日期:"))
+        export_start_date = QDateEdit()
+        export_start_date.setCalendarPopup(True)
+        export_start_date.setDate(self.date_from.date())
+        export_start_date.setFixedWidth(150)
+        date_layout.addWidget(export_start_date)
+        layout.addLayout(date_layout)
+        
+        # 结束日期
+        date_layout2 = QHBoxLayout()
+        date_layout2.addWidget(QLabel("结束日期:"))
+        export_end_date = QDateEdit()
+        export_end_date.setCalendarPopup(True)
+        export_end_date.setDate(self.date_to.date())
+        export_end_date.setFixedWidth(150)
+        date_layout2.addWidget(export_end_date)
+        layout.addLayout(date_layout2)
+        
+        # 按钮
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        ok_btn = QPushButton("确定")
+        ok_btn.clicked.connect(dialog.accept)
+        ok_btn.setFixedWidth(80)
+        button_layout.addWidget(ok_btn)
+        
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(dialog.reject)
+        cancel_btn.setFixedWidth(80)
+        button_layout.addWidget(cancel_btn)
+        
+        layout.addLayout(button_layout)
+        
+        # 显示对话框
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            start_date = export_start_date.date().toString("yyyy-MM-dd")
+            end_date = export_end_date.date().toString("yyyy-MM-dd")
+            
+            # 验证日期范围
+            if start_date > end_date:
+                QMessageBox.warning(self, "警告", "起始日期不能大于结束日期")
+                return
+            
+            # 筛选数据
+            filtered_data = [vuln for vuln in self.full_data if start_date <= vuln.date <= end_date]
+            if not filtered_data:
+                QMessageBox.information(self, "提示", f"{start_date} 到 {end_date} 期间没有数据")
+                return
+            
+            self._export_vulns(filtered_data, f"date_{start_date}_{end_date}")
 
     def export_single(self):
         """导出选中的单条漏洞"""
