@@ -7,6 +7,7 @@ from cisa import fetch_cisa
 from oscs import fetch_oscs
 from qianxin import fetch_qianxin
 from threatbook import fetch_threatbook
+from rss_biu import fetch_rss_biu
 
 class VulnScraper:
     def __init__(self, days_back=None):
@@ -28,7 +29,8 @@ class VulnScraper:
             "CISA": fetch_cisa,
             "OSCS": fetch_oscs,
             "Qianxin": fetch_qianxin,
-            "ThreatBook": fetch_threatbook
+            "ThreatBook": fetch_threatbook,
+            "RSS Biu": fetch_rss_biu
         }
         # 创建输出目录
         os.makedirs(self.output_dir, exist_ok=True)
