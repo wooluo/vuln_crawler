@@ -4,7 +4,7 @@ import time
 import random
 from typing import Dict, List, Callable, Optional, Any, Tuple
 import requests
-from models import VulnItem, SEVERITY_LEVELS, SEVERITY_LEVELS
+from models import VulnItem
 
 # Configure logger
 logging.basicConfig(
@@ -185,7 +185,19 @@ def sort_vulns_by_severity(vulns: List[VulnItem]) -> List[VulnItem]:
     Returns:
         排序后的漏洞列表
     """
-    return sorted(vulns, key=lambda v: v.get_severity_level(), reverse=True)
+    # 定义严重程度排序权重
+    severity_weights = {
+        "严重": 4,
+        "高危": 3,
+        "中危": 2,
+        "低危": 1,
+        "未知": 0
+    }
+    
+    def get_severity_weight(vuln):
+        return severity_weights.get(vuln.severity, 0)
+    
+    return sorted(vulns, key=get_severity_weight, reverse=True)
 
 def filter_vulns_by_severity(vulns: List[VulnItem], min_severity: int) -> List[VulnItem]:
     """
@@ -198,7 +210,19 @@ def filter_vulns_by_severity(vulns: List[VulnItem], min_severity: int) -> List[V
     Returns:
         过滤后的漏洞列表
     """
-    return [v for v in vulns if v.get_severity_level() >= min_severity]
+    # 定义严重程度权重
+    severity_weights = {
+        "严重": 4,
+        "高危": 3,
+        "中危": 2,
+        "低危": 1,
+        "未知": 0
+    }
+    
+    def get_severity_weight(vuln):
+        return severity_weights.get(vuln.severity, 0)
+    
+    return [v for v in vulns if get_severity_weight(v) >= min_severity]
 
 # ---------------- Markdown 格式化 ----------------
 def format_markdown(vuln: VulnItem, index: int) -> str:
