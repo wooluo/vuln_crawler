@@ -2,42 +2,61 @@
 """
 OSCS 开源安全情报
 
-接口:
-    https://www.oscs1024.com/oscs/v1/intelligence/list   (POST, JSON)
+新地址:
+    https://www.oscs1024.com/cm  (漏洞情报页面)
+    https://www.oscs1024.com/hd/[MPS编号] (漏洞详情页面)
 
 功能:
-    - fetch_oscs(date)     —— 仍按日期抓取 (高危/严重)
-    - search_oscs(keyword) —— 新增关键词 / CVE 搜索
+    - fetch_oscs(date)     —— 按日期抓取 (高危/严重)
+    - search_oscs(keyword) —— 关键词 / CVE 搜索
 """
 
 from typing import List
-import random, time
+import random, time, re
 from models import VulnItem
 from utils import _session
 
-LIST_API = "https://www.oscs1024.com/oscs/v1/intelligence/list"
+CM_PAGE = "https://www.oscs1024.com/cm"
 LEVEL_OK = {"严重", "高危"}        # 要“中危”也算就加进去
 
 # ------------------------- 内部通用函数 -------------------------
 
-def _post_page(page: int, per_page: int = 100, keyword: str = "") -> dict:
+def _parse_cm_page() -> List[dict]:
     """
-    POST 请求分页列表；服务器 5xx 时重试 ≤ 3 次
-    返回形如 {"data":{"data":[…]}} 的最外层 dict
+    解析漏洞情报页面，提取漏洞信息
     """
-    payload = {"page": page, "per_page": per_page}
-    if keyword:
-        payload["keyword"] = keyword
-
-    for attempt in range(3):
-        try:
-            r = _session.post(LIST_API, json=payload, timeout=8)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            print(f"[OSCS] page {page} attempt {attempt+1}: {e}")
-            time.sleep(random.uniform(1, 2))
-    return {}
+    try:
+        r = _session.get(CM_PAGE, timeout=8)
+        r.raise_for_status()
+        content = r.text
+        
+        # 提取漏洞信息 - 匹配表格结构
+        # 匹配模式：公开时间 标题 风险等级
+        pattern = r'(\d{4}-\d{2}-\d{2})[^>]*>(.*?)<[^>]*>(严重|高危|中危|低危)'  
+        matches = re.findall(pattern, content, re.DOTALL)
+        
+        vulns = []
+        for match in matches:
+            date_str, name, severity = match
+            # 清理标题中的空白字符
+            name = re.sub(r'\s+', ' ', name).strip()
+            if severity in LEVEL_OK:
+                vulns.append({
+                    "title": name,
+                    "level": severity,
+                    "public_time": f"{date_str}T00:00:00",
+                    "url": CM_PAGE
+                })
+        
+        return vulns
+    except Exception as e:
+        print(f"[OSCS] 解析页面失败: {e}")
+        # 打印部分页面内容用于调试
+        print("[OSCS] 页面内容前 500 字符:")
+        print(content[:500])
+        
+        # 出错时返回空列表
+        return []
 
 # --------------------------- 搜索 ---------------------------
 
@@ -49,41 +68,42 @@ def search_oscs(keyword: str) -> List[VulnItem]:
     仅保留 level ∈ LEVEL_OK
     """
     vulns: List[VulnItem] = []
-    page, per_page = 1, 100
     is_cve = keyword.lower().startswith("cve-")
-
-    while True:
-        j = _post_page(page, per_page, keyword)
-        rows = j.get("data", {}).get("data", [])
-        if not rows:
-            break
-
-        for row in rows:
-            if row["level"] not in LEVEL_OK:
-                continue
-
-            if is_cve:
-                if keyword.lower() != (row.get("cve_id") or "").lower():
-                    continue
-            else:
-                if keyword.lower() not in row["title"].lower():
-                    continue
-
-            vulns.append(
-                VulnItem(
-                    name=row["title"],
-                    cve=row.get("cve_id"),
-                    date=row["public_time"].split("T")[0],
-                    severity=row["level"],
-                    tags=None,
-                    source="OSCS",
-                    description=row.get("desc") or row.get("description"),
-                    reference=[row.get("url")] if row.get("url") else None,
+    
+    # 解析漏洞情报页面
+    rows = _parse_cm_page()
+    
+    for row in rows:
+        if is_cve:
+            # 简单匹配，实际可能需要更复杂的逻辑
+            if keyword.lower() in row["title"].lower():
+                vulns.append(
+                    VulnItem(
+                        name=row["title"],
+                        cve=None,  # 从页面无法直接获取 CVE
+                        date=row["public_time"].split("T")[0],
+                        severity=row["level"],
+                        tags=None,
+                        source="OSCS",
+                        description=None,  # 从页面无法直接获取描述
+                        reference=[row["url"]] if row["url"] else None,
+                    )
                 )
-            )
-
-        page += 1
-
+        else:
+            if keyword.lower() in row["title"].lower():
+                vulns.append(
+                    VulnItem(
+                        name=row["title"],
+                        cve=None,
+                        date=row["public_time"].split("T")[0],
+                        severity=row["level"],
+                        tags=None,
+                        source="OSCS",
+                        description=None,
+                        reference=[row["url"]] if row["url"] else None,
+                    )
+                )
+    
     return vulns
 
 # --------------------------- 按日期抓取 ---------------------------
@@ -93,39 +113,28 @@ def fetch_oscs(date: str) -> List[VulnItem]:
     返回发布日期 == <date> 且 level ∈ LEVEL_OK 的列表
     """
     vulns: List[VulnItem] = []
-    page, per_page = 1, 100
+    
+    # 解析漏洞情报页面
+    rows = _parse_cm_page()
+    
+    for row in rows:
+        pub_date = row["public_time"].split("T")[0]
+        if pub_date != date:
+            continue
+        if row["level"] not in LEVEL_OK:
+            continue
 
-    while True:
-        j = _post_page(page, per_page)
-        rows = j.get("data", {}).get("data", [])
-        if not rows:
-            break
-
-        for row in rows:
-            pub_date = row["public_time"].split("T")[0]
-            if pub_date != date:
-                continue
-            if row["level"] not in LEVEL_OK:
-                continue
-
-            vulns.append(
-                VulnItem(
-                    name=row["title"],
-                    cve=row.get("cve_id"),   # 列表有时带 cve_id；若无留空
-                    date=pub_date,
-                    severity=row["level"],
-                    tags=None,
-                    source="OSCS",
-                    description=row.get("desc") or row.get("description"),
-                    reference=[row.get("url")] if row.get("url") else None,
-                )
+        vulns.append(
+            VulnItem(
+                name=row["title"],
+                cve=None,  # 从页面无法直接获取 CVE
+                date=pub_date,
+                severity=row["level"],
+                tags=None,
+                source="OSCS",
+                description=None,  # 从页面无法直接获取描述
+                reference=[row["url"]] if row["url"] else None,
             )
-
-        # 列表按时间倒序；如果最后一条已早于目标日期就不用翻下去了
-        last_date = rows[-1]["public_time"].split("T")[0]
-        if last_date < date:
-            break
-
-        page += 1
+        )
 
     return vulns
